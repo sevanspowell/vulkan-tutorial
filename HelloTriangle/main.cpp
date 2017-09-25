@@ -12,7 +12,17 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+#define GLM_FORCE_RADIANS
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <chrono>
+
+struct UniformBufferObject {
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 proj;
+};
 
 struct Vertex {
     glm::vec2 pos;
@@ -153,6 +163,8 @@ class HelloTriangleApplication {
     std::vector<VkImageView> swapChainImageViews;
 
     VkRenderPass renderPass;
+
+    VkDescriptorSetLayout descriptorSetLayout;
     VkPipelineLayout pipelineLayout;
 
     VkPipeline graphicsPipeline;
@@ -167,8 +179,12 @@ class HelloTriangleApplication {
 
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
+
     VkBuffer indexBuffer;
     VkDeviceMemory indexBufferMemory;
+
+    VkBuffer uniformBuffer;
+    VkDeviceMemory uniformBufferMemory;
 
     void initWindow() {
         glfwInit();
@@ -205,11 +221,13 @@ class HelloTriangleApplication {
         createSwapChain();
         createImageViews();
         createRenderPass();
+        createDescriptorSetLayout();
         createGraphicsPipeline();
         createFramebuffers();
         createCommandPool();
         createVertexBuffer();
         createIndexBuffer();
+        createUniformBuffer();
         createCommandBuffers();
         createSemaphores();
     }
@@ -217,6 +235,8 @@ class HelloTriangleApplication {
     void mainLoop() {
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
+
+            updateUniformBuffer();
             drawFrame();
         }
 
@@ -318,6 +338,10 @@ class HelloTriangleApplication {
 
     void cleanup() {
         cleanupSwapChain();
+
+        vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+        vkDestroyBuffer(device, uniformBuffer, nullptr);
+        vkFreeMemory(device, uniformBufferMemory, nullptr);
 
         vkDestroyBuffer(device, indexBuffer, nullptr);
         vkFreeMemory(device, indexBufferMemory, nullptr);
@@ -851,6 +875,26 @@ class HelloTriangleApplication {
         return shaderModule;
     }
 
+    void createDescriptorSetLayout() {
+        VkDescriptorSetLayoutBinding uboLayoutBinding = {};
+        uboLayoutBinding.binding                      = 0;
+        uboLayoutBinding.descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboLayoutBinding.descriptorCount    = 1;
+        uboLayoutBinding.stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
+        uboLayoutBinding.pImmutableSamplers = nullptr;
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings    = &uboLayoutBinding;
+
+        if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
+                                        &descriptorSetLayout) != VK_SUCCESS) {
+            throw std::runtime_error(
+                "App: Failed to create descriptor set layout!");
+        }
+    }
+
     void createGraphicsPipeline() {
         std::vector<char> vertShaderCode = readFile("shaders/vert.spv");
         std::vector<char> fragShaderCode = readFile("shaders/frag.spv");
@@ -979,8 +1023,8 @@ class HelloTriangleApplication {
         VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
         pipelineLayoutInfo.sType =
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pipelineLayoutInfo.setLayoutCount         = 0;
-        pipelineLayoutInfo.pSetLayouts            = nullptr;
+        pipelineLayoutInfo.setLayoutCount         = 1;
+        pipelineLayoutInfo.pSetLayouts            = &descriptorSetLayout;
         pipelineLayoutInfo.pushConstantRangeCount = 0;
         pipelineLayoutInfo.pPushConstantRanges    = 0;
 
@@ -1190,6 +1234,14 @@ class HelloTriangleApplication {
         vkFreeMemory(device, stagingBufferMemory, nullptr);
     }
 
+    void createUniformBuffer() {
+        VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+        createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                     uniformBuffer, uniformBufferMemory);
+    }
+
     uint32_t findMemoryType(uint32_t typeFilter,
                             VkMemoryPropertyFlags properties) {
         VkPhysicalDeviceMemoryProperties memProperties;
@@ -1256,8 +1308,7 @@ class HelloTriangleApplication {
                                  VK_INDEX_TYPE_UINT16);
 
             vkCmdDrawIndexed(commandBuffers[i],
-                             static_cast<uint32_t>(indices.size()), 1, 0, 0,
-                             0);
+                             static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
             vkCmdEndRenderPass(commandBuffers[i]);
 
@@ -1278,6 +1329,33 @@ class HelloTriangleApplication {
                               &renderFinishedSemaphore) != VK_SUCCESS) {
             throw std::runtime_error("App: Failed to create semaphores!");
         }
+    }
+
+    void updateUniformBuffer() {
+        static auto startTime = std::chrono::high_resolution_clock::now();
+
+        auto currentTime = std::chrono::high_resolution_clock::now();
+        float time       = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         currentTime - startTime)
+                         .count() /
+                     1000.0f;
+
+        UniformBufferObject ubo = {};
+        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f),
+                                glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f),
+                               glm::vec3(0.0f, 0.0f, 0.0f),
+                               glm::vec3(0.0f, 0.0f, 1.0f));
+        ubo.proj = glm::perspective(
+            glm::radians(45.0f),
+            swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 10.0f);
+        ubo.proj[1][1] *= -1; // GLM designed for OpenGL, where Y coordinates of
+                              // clip space are inverted. Flip to correct.
+
+        void *data;
+        vkMapMemory(device, uniformBufferMemory, 0, sizeof(ubo), 0, &data);
+        memcpy(data, &ubo, sizeof(ubo));
+        vkUnmapMemory(device, uniformBufferMemory);
     }
 };
 
