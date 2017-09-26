@@ -1,7 +1,9 @@
 PROJECT_NAME = HelloTriangle 
 
 VULKAN_SDK_PATH = /home/sam/Developer/VulkanSDK/1.0.57.0/x86_64
-CFLAGS = -std=c++11 -I$(VULKAN_SDK_PATH)/include
+STB_INCLUDE_PATH = ./lib/stb/
+
+CFLAGS = -std=c++11 -I$(VULKAN_SDK_PATH)/include -I$(STB_INCLUDE_PATH)
 LDFLAGS = -L$(VULKAN_SDK_PATH)/lib `pkg-config --static --libs glfw3` -lvulkan
 BIN_DIR = build
 MKDIR_P = mkdir -p
